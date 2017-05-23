@@ -53,8 +53,15 @@ __FBSDID("$FreeBSD: head/sys/netinet/sctputil.c 310590 2016-12-26 11:06:41Z tuex
 #include <netinet/sctp_auth.h>
 #include <netinet/sctp_asconf.h>
 #include <netinet/sctp_bsd_addr.h>
+#if defined(__Userspace_os_Linux)
+#define __FAVOR_BSD    /* (on Ubuntu at least) enables UDP header field names like BSD in RFC 768 */
+#endif
 #if defined(__Userspace__)
 #include <netinet/sctp_constants.h>
+#if !defined(__Userspace_os_Windows)
+#include <netinet/udp.h>
+#include <netinet/icmp6.h>
+#endif
 #endif
 #if defined(__FreeBSD__)
 #include <netinet/udp.h>
@@ -1607,6 +1614,9 @@ sctp_timeout_handler(void *t)
 	int did_output;
 	int type;
 
+#if defined(__Userspace__)
+	struct socket *upcall_socket = NULL;
+#endif
 	tmr = (struct sctp_timer *)t;
 	inp = (struct sctp_inpcb *)tmr->ep;
 	stcb = (struct sctp_tcb *)tmr->tcb;
@@ -1737,6 +1747,16 @@ sctp_timeout_handler(void *t)
 	}
 	SCTP_OS_TIMER_DEACTIVATE(&tmr->timer);
 
+#if defined(__Userspace__)
+	if (stcb && !(stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_SOCKET_GONE)) {
+		if (stcb->sctp_socket != NULL) {
+			upcall_socket = stcb->sctp_socket;
+			SOCK_LOCK(upcall_socket);
+			soref(upcall_socket);
+			SOCK_UNLOCK(upcall_socket);
+		}
+	}
+#endif
 	/* call the handler for the appropriate timer type */
 	switch (type) {
 	case SCTP_TIMER_TYPE_ZERO_COPY:
@@ -2052,6 +2072,18 @@ get_out:
 	}
 
 out_decr:
+#if defined(__Userspace__)
+	if (upcall_socket != NULL) {
+		if (upcall_socket->so_upcall != NULL) {
+		    if (upcall_socket->so_error) {
+			    (*upcall_socket->so_upcall)(upcall_socket, upcall_socket->so_upcallarg, M_NOWAIT);
+			}
+		}
+		ACCEPT_LOCK();
+		SOCK_LOCK(upcall_socket);
+		sorele(upcall_socket);
+	}
+#endif
 	if (inp) {
 		SCTP_INP_DECR_REF(inp);
 	}
@@ -7770,10 +7802,11 @@ sctp_recv_udp_tunneled_packet(struct mbuf *m, int off, struct inpcb *inp,
 	m_freem(m);
 }
 #endif
+#endif
 
-#if __FreeBSD_version >= 1100000
+#if defined(__Userspace__) || (defined(__FreeBSD__) && __FreeBSD_version >= 1100000)
 #ifdef INET
-static void
+void
 sctp_recv_icmp_tunneled_packet(int cmd, struct sockaddr *sa, void *vip, void *ctx SCTP_UNUSED)
 {
 	struct ip *outer_ip, *inner_ip;
@@ -7787,12 +7820,16 @@ sctp_recv_icmp_tunneled_packet(int cmd, struct sockaddr *sa, void *vip, void *ct
 	struct sockaddr_in src, dst;
 	uint8_t type, code;
 
+#if defined(__Userspace__)
+	struct socket *upcall_socket = NULL;
+#endif
 	inner_ip = (struct ip *)vip;
 	icmp = (struct icmp *)((caddr_t)inner_ip -
 	    (sizeof(struct icmp) - sizeof(struct ip)));
 	outer_ip = (struct ip *)((caddr_t)icmp - sizeof(struct ip));
 	if (ntohs(outer_ip->ip_len) <
 	    sizeof(struct ip) + 8 + (inner_ip->ip_hl << 2) + sizeof(struct udphdr) + 8) {
+	    SCTPDBG(SCTP_DEBUG_USR, "Packet too short!!\n");
 		return;
 	}
 	udp = (struct udphdr *)((caddr_t)inner_ip + (inner_ip->ip_hl << 2));
@@ -7872,6 +7909,26 @@ sctp_recv_icmp_tunneled_packet(int cmd, struct sockaddr *sa, void *vip, void *ct
 		sctp_notify(inp, stcb, net, type, code,
 		            ntohs(inner_ip->ip_len),
 		            ntohs(icmp->icmp_nextmtu));
+#if defined(__Userspace__)
+			if (stcb && upcall_socket == NULL && !(stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_SOCKET_GONE)) {
+				if (stcb->sctp_socket != NULL) {
+					upcall_socket = stcb->sctp_socket;
+					SOCK_LOCK(upcall_socket);
+					soref(upcall_socket);
+					SOCK_UNLOCK(upcall_socket);
+				}
+			}
+			if (upcall_socket != NULL) {
+				if (upcall_socket->so_upcall != NULL) {
+					if (upcall_socket->so_error) {
+						(*upcall_socket->so_upcall)(upcall_socket, upcall_socket->so_upcallarg, M_NOWAIT);
+					}
+				}
+				ACCEPT_LOCK();
+				SOCK_LOCK(upcall_socket);
+				sorele(upcall_socket);
+			}
+#endif
 	} else {
 #if defined(__FreeBSD__) && __FreeBSD_version < 500000
 		/*
@@ -7896,9 +7953,11 @@ sctp_recv_icmp_tunneled_packet(int cmd, struct sockaddr *sa, void *vip, void *ct
 	return;
 }
 #endif
+#endif
 
+#if defined(__Userspace__) || (defined(__FreeBSD__) && __FreeBSD_version >= 1100000)
 #ifdef INET6
-static void
+void
 sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx SCTP_UNUSED)
 {
 	struct ip6ctlparam *ip6cp;
@@ -7909,6 +7968,9 @@ sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx
 	struct udphdr udp;
 	struct sockaddr_in6 src, dst;
 	uint8_t type, code;
+#if defined(__Userspace__)
+	struct socket *upcall_socket = NULL;
+#endif
 
 	ip6cp = (struct ip6ctlparam *)d;
 	/*
@@ -7921,8 +7983,9 @@ sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx
 	/* Check if we can safely examine the ports and the
 	 * verification tag of the SCTP common header.
 	 */
-	if (ip6cp->ip6c_m->m_pkthdr.len <
-	    ip6cp->ip6c_off + sizeof(struct udphdr)+ offsetof(struct sctphdr, checksum)) {
+	if (ip6cp->ip6c_m->m_pkthdr.len < (uint16_t)
+	    (ip6cp->ip6c_off + sizeof(struct udphdr)+ offsetof(struct sctphdr, checksum))) {
+	    SCTPDBG(SCTP_DEBUG_USR, "Packet too short!!\n");
 		return;
 	}
 	/* Copy out the UDP header. */
@@ -7987,12 +8050,12 @@ sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx
 				return;
 			}
 		} else {
-#if defined(__FreeBSD__)
-			if (ip6cp->ip6c_m->m_pkthdr.len >=
-			    ip6cp->ip6c_off + sizeof(struct udphdr) +
-			                      sizeof(struct sctphdr) +
-			                      sizeof(struct sctp_chunkhdr) +
-			                      offsetof(struct sctp_init, a_rwnd)) {
+#if defined(__FreeBSD__) || defined(__Userspace__)
+			if (ip6cp->ip6c_m->m_pkthdr.len >= (uint16_t)
+			    (ip6cp->ip6c_off + sizeof(struct udphdr) +
+			                       sizeof(struct sctphdr) +
+			                       sizeof(struct sctp_chunkhdr) +
+			                       offsetof(struct sctp_init, a_rwnd))) {
 				/*
 				 * In this case we can check if we
 				 * got an INIT chunk and if the
@@ -8037,6 +8100,26 @@ sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx
 		}
 		sctp6_notify(inp, stcb, net, type, code,
 			     (uint16_t)ntohl(ip6cp->ip6c_icmp6->icmp6_mtu));
+#if defined(__Userspace__)
+			if (stcb && upcall_socket == NULL && !(stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_SOCKET_GONE)) {
+				if (stcb->sctp_socket != NULL) {
+					upcall_socket = stcb->sctp_socket;
+					SOCK_LOCK(upcall_socket);
+					soref(upcall_socket);
+					SOCK_UNLOCK(upcall_socket);
+				}
+			}
+			if (upcall_socket != NULL) {
+				if (upcall_socket->so_upcall != NULL) {
+					if (upcall_socket->so_error) {
+						(*upcall_socket->so_upcall)(upcall_socket, upcall_socket->so_upcallarg, M_NOWAIT);
+					}
+				}
+				ACCEPT_LOCK();
+				SOCK_LOCK(upcall_socket);
+				sorele(upcall_socket);
+			}
+#endif
 	} else {
 #if defined(__FreeBSD__) && __FreeBSD_version < 500000
 		if (PRC_IS_REDIRECT(cmd) && (inp != NULL)) {
@@ -8058,6 +8141,7 @@ sctp_recv_icmp6_tunneled_packet(int cmd, struct sockaddr *sa, void *d, void *ctx
 #endif
 #endif
 
+#if defined(__FreeBSD__)
 void
 sctp_over_udp_stop(void)
 {
@@ -8120,7 +8204,7 @@ sctp_over_udp_start(void)
 	/* Call the special UDP hook. */
 	if ((ret = udp_set_kernel_tunneling(SCTP_BASE_INFO(udp4_tun_socket),
 	                                    sctp_recv_udp_tunneled_packet,
-#if __FreeBSD_version >= 1100000
+#if __FreeBSD_version >= 1100000 || defined(__Userspace__)
 	                                    sctp_recv_icmp_tunneled_packet,
 #endif
 	                                    NULL))) {
@@ -8148,7 +8232,7 @@ sctp_over_udp_start(void)
 	/* Call the special UDP hook. */
 	if ((ret = udp_set_kernel_tunneling(SCTP_BASE_INFO(udp6_tun_socket),
 	                                    sctp_recv_udp_tunneled_packet,
-#if __FreeBSD_version >= 1100000
+#if __FreeBSD_version >= 1100000 || defined(__Userspace__)
 	                                    sctp_recv_icmp6_tunneled_packet,
 #endif
 	                                    NULL))) {

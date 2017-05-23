@@ -131,22 +131,28 @@ find_package(Threads)
 # PROGRAMS
 #################################################
 
-set(CHECK_PROGRAMS
-    client.c
-    datachan_serv.c
-    daytime_server.c
-    discard_server.c
-    echo_server.c
-    ekr_client.c
-    ekr_loop.c
-    ekr_loop_offload.c
-    ekr_peer.c
-    ekr_server.c
-    http_client.c
-    rtcweb.c
-    test_libmgmt.c
-    test_timer.c
-    tsctp.c
+SET (CHECK_PROGRAMS
+	client.c
+	datachan_serv.c
+	daytime_server.c
+	discard_server.c
+	echo_server.c
+	ekr_client.c
+	ekr_loop.c
+	ekr_peer.c
+	ekr_server.c
+	http_client.c
+	rtcweb.c
+	test_libmgmt.c
+	tsctp.c
+	test_timer.c
+	http_client_upcall.c
+	client_upcall.c
+	discard_server_upcall.c
+	echo_server_upcall.c
+	chargen_server_upcall.c
+	daytime_server_upcall.c
+	ekr_loop_offload.c
 )
 
 # SETTINGS FOR UNIX COMPILER

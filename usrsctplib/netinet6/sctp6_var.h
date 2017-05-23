@@ -38,11 +38,38 @@ __FBSDID("$FreeBSD: head/sys/netinet6/sctp6_var.h 309607 2016-12-06 10:21:25Z tu
 #ifndef _NETINET6_SCTP6_VAR_H_
 #define _NETINET6_SCTP6_VAR_H_
 
+#if (defined(__Userspace_os_Darwin) || defined(__Userspace_os_NetBSD) || defined(__Userspace_os_Linux))
+struct ip6ctlparam {
+	struct mbuf *ip6c_m;            /* start of mbuf chain */
+	struct icmp6_hdr *ip6c_icmp6;   /* icmp6 header of target packet */
+	struct ip6_hdr *ip6c_ip6;       /* ip6 header of target packet */
+	int ip6c_off;                   /* offset of the target proto header */
+	struct sockaddr_in6 *ip6c_src;  /* srcaddr w/ additional info */
+	struct sockaddr_in6 *ip6c_dst;  /* (final) dstaddr w/ additional info */
+	struct in6_addr *ip6c_finaldst; /* final destination address */
+	void *ip6c_cmdarg;              /* control command dependent data */
+	u_int8_t ip6c_nxt;              /* final next header field */
+};
+#endif
+
 #if defined(__Userspace__)
 #ifdef INET
 extern void in6_sin6_2_sin(struct sockaddr_in *, struct sockaddr_in6 *);
 extern void in6_sin6_2_sin_in_sock(struct sockaddr *);
 extern void in6_sin_2_v4mapsin6(struct sockaddr_in *, struct sockaddr_in6 *);
+#endif
+#ifdef INET6
+void sctp6_notify(struct sctp_inpcb *, struct sctp_tcb *, struct sctp_nets *,
+                  uint8_t, uint8_t, uint16_t);
+void sctp6_ctlinput(int, struct sockaddr *, void *);
+#if defined(__Userspace_os_Windows)
+#define ICMP6_DST_UNREACH_NOROUTE       0
+#define ICMP6_DST_UNREACH_ADMIN         1
+#define ICMP6_DST_UNREACH_BEYONDSCOPE   2
+#define ICMP6_DST_UNREACH_ADDR          3
+#define ICMP6_DST_UNREACH_NOPORT        4
+#define ICMP6_PARAMPROB_NEXTHEADER      1
+#endif
 #endif
 #endif
 #if defined(_KERNEL)
